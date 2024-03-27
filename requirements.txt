@@ -8,3 +8,5 @@ imageio
 Pillow
 ipykernel
 scikit-learn
+minigrid
+pygame
