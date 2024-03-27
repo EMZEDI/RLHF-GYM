@@ -1,0 +1,10 @@
+numpy
+pandas
+matplotlib
+xgboost
+gymnasium
+tqdm
+imageio
+Pillow
+ipykernel
+scikit-learn
