@@ -36,7 +36,7 @@ class MinigridEnv(gym.Env):
     - observation_space: The observation space of the environment, represented as a 2D Box space.
     - goal_state: The goal state of the environment.
     """
-    
+
     # Define the action space
     ACTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0)]  # Up, Down, Right, Left
 
@@ -59,6 +59,8 @@ class MinigridEnv(gym.Env):
             self.distance = self.euclidean_distance
         else:
             raise ValueError("Invalid distance calculation method")
+        
+        self.state = None   # should call reset first
         
     def euclidean_distance(self, s, goal):
         return np.linalg.norm(np.array(s) - np.array(goal))
