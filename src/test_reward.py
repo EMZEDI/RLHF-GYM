@@ -12,9 +12,18 @@ model.load_state_dict(torch.load('models/reward_model.pth'))
 model.eval()
 
 # Create a tensor for a single state-action pair
-test = torch.tensor([[23.0, 26.0, 0.0, 1.0]])
+test1 = torch.tensor([[20.0, 20.0, 0.0, 1.0]])
+test2 = torch.tensor([[20.0, 20.0, 0.0, -1.0]])
+test4 = torch.tensor([[20.0, 20.0, -1.0, 0.0]])
+test3 = torch.tensor([[20.0, 20.0, 1.0, 0.0]])
 
 # Run the model
-output = model(test[0][0].unsqueeze(0), test[0][1].unsqueeze(0), test[0][2].unsqueeze(0), test[0][3].unsqueeze(0))
+output1 = model(test1[0][0].unsqueeze(0), test1[0][1].unsqueeze(0), test1[0][2].unsqueeze(0), test1[0][3].unsqueeze(0))
+output2 = model(test2[0][0].unsqueeze(0), test2[0][1].unsqueeze(0), test2[0][2].unsqueeze(0), test2[0][3].unsqueeze(0))
+output3 = model(test3[0][0].unsqueeze(0), test3[0][1].unsqueeze(0), test3[0][2].unsqueeze(0), test3[0][3].unsqueeze(0))
+output4 = model(test4[0][0].unsqueeze(0), test4[0][1].unsqueeze(0), test4[0][2].unsqueeze(0), test4[0][3].unsqueeze(0))
 
-print(output)
+print(output1)
+print(output2)
+print(output3)
+print(output4)
