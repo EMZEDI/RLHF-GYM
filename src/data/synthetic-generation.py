@@ -77,8 +77,12 @@ for _ in range(num_samples):
                 reward = 0
     
     # Append data to dataset
-    dataset.append((s, np.array(env.ACTIONS[a1]), reward))
-    dataset.append((s, np.array(env.ACTIONS[a2]), 1 - reward))  # Reward for a2 is opposite of reward for a1
+    if (reward == 1):
+        dataset.append((s, np.array(env.ACTIONS[a1]), reward))
+        dataset.append((s, np.array(env.ACTIONS[a2]), 1 - reward))
+    else:
+        dataset.append((s, np.array(env.ACTIONS[a2]), 1 - reward))
+        dataset.append((s, np.array(env.ACTIONS[a1]), reward))
 
 # Save the dataset as tabular format
 with open('dataset/minigrid_RLHF_dataset.csv', 'w') as f:

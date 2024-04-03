@@ -1,7 +1,6 @@
 numpy
 pandas
 matplotlib
-xgboost
 gymnasium
 tqdm
 imageio
@@ -10,3 +9,4 @@ ipykernel
 scikit-learn
 minigrid
 pygame
+torch
