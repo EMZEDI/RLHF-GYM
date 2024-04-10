@@ -46,6 +46,9 @@ class ACNN(nn.Module):
         elif isinstance(obs, np.int32):
             obs = np.asarray([obs])
             obs = torch.tensor(obs, dtype=torch.float)
+
+        """if obs.ndim == 1:
+            obs = torch.reshape(obs, (obs.shape[0], 1))"""
         logits = nn.functional.relu(self.layer1(obs))
         output = self.layer2(logits)
 
@@ -55,8 +58,8 @@ class PPO:
 
     def __init__(self, env):
         self.env = env
-        self.obs_dim = 1 # grid world is 10x10
-        self.action_dim = 1 # there are four discrete actions that can be taken (up, right, down, left)
+        self.obs_dim = 2 # grid world is 10x10
+        self.action_dim = 4 # there are four discrete actions that can be taken (up, right, down, left)
         self.actor = ACNN(self.obs_dim, self.action_dim)
         self.critic = ACNN(self.obs_dim, 1)
 
@@ -116,7 +119,7 @@ class PPO:
         while batch_t < self.steps_per_batch:
 
             episode_r = []
-            input = self.env.reset()[0]
+            input = self.env.reset()
             done = False
 
             for ep_step in range(self.max_episode):
@@ -127,8 +130,8 @@ class PPO:
                 state, reward, done, _ = self.env.step(a)
 
                 episode_r.append(reward)
-                batch_a.append(a)
-                batch_log_probs.append(log_prob)
+                batch_a.append(a.tolist())
+                batch_log_probs.append(log_prob.numpy().tolist())
                 if done: break
             batch_lens.append(ep_step + 1)  # plus 1 because timestep starts at 0
             batch_r.append(episode_r)
@@ -146,8 +149,11 @@ class PPO:
         dist = MultivariateNormal(mean, self.cov_mat) # get multivariate distribution to help with exploring
         a = dist.sample()
         log_prob = dist.log_prob(a)
-        a = a.argmax().item()
-        return a, log_prob.detach()
+        if a.ndim == 1:
+            a = a.argmax()
+        else:
+            a = a.argmax(dim=1)
+        return a.detach().numpy(), log_prob.detach()
 
     def rtgs_comp(self, batch_r):
         batch_rtgs = []
@@ -161,15 +167,12 @@ class PPO:
         return batch_rtgs
 
     def evaluate(self, batch_obs, batch_acts):
-        if batch_obs.ndim == 1:
-            batch_obs = torch.reshape(batch_obs, (batch_obs.shape[0], 1))
-        if batch_acts.ndim == 1:
-            batch_acts = torch.reshape(batch_acts, (batch_acts.shape[0], 1))
         V = self.critic(batch_obs).squeeze()
 
         mean = self.actor(batch_obs)
         dist = MultivariateNormal(mean, self.cov_mat)
-        log_probs = dist.log_prob(batch_acts)
+        a = dist.sample()
+        log_probs = dist.log_prob(a)
 
         return V, log_probs
 
