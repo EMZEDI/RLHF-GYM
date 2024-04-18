@@ -5,8 +5,11 @@ Inspired by tutorial given by Eric Yang Yu: https://medium.com/analytics-vidhya/
 """
 
 import gym
-from RLHFenvironment import RLHFEnv
+import matplotlib.pyplot as plt
 
+from evalPPO import eval_policy
+from RLHFenvironment import RLHFEnv
+import time
 import numpy as np
 import torch
 import torch.nn as nn
@@ -56,25 +59,45 @@ class ACNN(nn.Module):
 
 class PPO:
 
-    def __init__(self, env):
+    def __init__(self, env, alpha=0.1, gamma=0.99):
         self.env = env
         self.obs_dim = 2 # grid world is 10x10
         self.action_dim = 4 # there are four discrete actions that can be taken (up, right, down, left)
         self.actor = ACNN(self.obs_dim, self.action_dim)
         self.critic = ACNN(self.obs_dim, 1)
 
-        self._init_hp()
+        self._init_hp(alpha, gamma)
         self.cov_var = torch.full(size=(self.action_dim,), fill_value=0.5)
         self.cov_mat = torch.diag(self.cov_var)
 
         self.a_optim = Adam(self.actor.parameters(), lr=self.alpha)
         self.c_optim = Adam(self.critic.parameters(), lr=self.alpha)
+
+        self.logger = {
+            'delta_t': time.time_ns(),
+            't_so_far': 0,  # timesteps so far
+            'i_so_far': 0,  # iterations so far
+            'batch_lens': [],  # episodic lengths in batch
+            'batch_rews': [],  # episodic returns in batch
+            'actor_losses': [],  # losses of actor network in current iteration
+            'overall_loss': [],
+            'overall_reward': []
+        }
+
     def learn(self, n_episodes):
         t = 0 # t = current time step
+        i_so_far = 0
         while t < n_episodes:
             batch_s, batch_a, batch_log_probs, batch_rtgs, batch_lens = self.rollout()
             t += np.sum(batch_lens)
             v, _ = self.evaluate(batch_s, batch_a)
+
+            # Increment the number of iterations
+            i_so_far += 1
+
+            # Logging timesteps so far and iterations so far
+            self.logger['t_so_far'] = t
+            self.logger['i_so_far'] = i_so_far
 
             adv_k = batch_rtgs - v.detach() # getting the advantages for the time steps
 
@@ -98,14 +121,27 @@ class PPO:
                 critic_loss.backward()
                 self.c_optim.step()
 
+                self.logger['actor_losses'].append(actor_loss.detach())
 
-    def _init_hp(self):
-        self.steps_per_batch = 4800
-        self.max_episode = 1600 # maximum timesteps per episode: prevents episode from runnning forever
-        self.gamma = 0.95
-        self.n_updates_per_iteration = 5
+            self._log_summary()
+
+            # Save our model if it's time
+            if i_so_far % self.save_freq == 0:
+                torch.save(self.actor.state_dict(), './ppo_actor.pth')
+                torch.save(self.critic.state_dict(), './ppo_critic.pth')
+
+    def _init_hp(self, alpha, gamma):
+        self.steps_per_batch = 10000
+        self.max_episode = 500 # maximum timesteps per episode: prevents episode from runnning forever
+        self.gamma = gamma
+        self.n_updates_per_iteration = 10
         self.clip = 0.2
-        self.alpha = 0.005
+        self.alpha = alpha
+        # Miscellaneous parameters
+        self.render = True  # If we should render during rollout
+        self.render_every_i = 10  # Only render every n iterations
+        self.save_freq = 10  # How often we save in number of iterations
+        self.seed = None
 
     def rollout(self):
         batch_s = []
@@ -140,6 +176,10 @@ class PPO:
         batch_a = torch.tensor(batch_a, dtype=torch.float)
         batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
         batch_rtgs = self.rtgs_comp(batch_r)
+
+        # Log the episodic returns and episodic lengths in this batch.
+        self.logger['batch_rews'] = batch_r
+        self.logger['batch_lens'] = batch_lens
 
         return batch_s, batch_a, batch_log_probs, batch_rtgs, batch_lens
 
@@ -176,6 +216,135 @@ class PPO:
 
         return V, log_probs
 
+    def _log_summary(self):
+        """
+            Print to stdout what we've logged so far in the most recent batch.
+
+            Parameters:
+                None
+
+            Return:
+                None
+        """
+        # Calculate logging values. I use a few python shortcuts to calculate each value
+        # without explaining since it's not too important to PPO; feel free to look it over,
+        # and if you have any questions you can email me (look at bottom of README)
+        delta_t = self.logger['delta_t']
+        self.logger['delta_t'] = time.time_ns()
+        delta_t = (self.logger['delta_t'] - delta_t) / 1e9
+        delta_t = str(round(delta_t, 2))
+
+        t_so_far = self.logger['t_so_far']
+        i_so_far = self.logger['i_so_far']
+        avg_ep_lens = np.mean(self.logger['batch_lens'])
+        avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
+        avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
+
+
+        self.logger['overall_reward'].append(avg_ep_rews)
+        self.logger['overall_loss'].append(avg_actor_loss)
+
+        # Round decimal places for more aesthetic logging messages
+        avg_ep_lens = str(round(avg_ep_lens, 2))
+        avg_ep_rews = str(round(avg_ep_rews, 2))
+        avg_actor_loss = str(round(avg_actor_loss, 5))
+
+        # Print logging statements
+        print(flush=True)
+        print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
+        print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
+        print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
+        print(f"Average Loss: {avg_actor_loss}", flush=True)
+        print(f"Timesteps So Far: {t_so_far}", flush=True)
+        print(f"Iteration took: {delta_t} secs", flush=True)
+        print(f"------------------------------------------------------", flush=True)
+        print(flush=True)
+
+        # Reset batch-specific logging data
+        self.logger['batch_lens'] = []
+        self.logger['batch_rews'] = []
+        self.logger['actor_losses'] = []
+
+
+def train(env, alpha, gamma, n_steps=200000):
+
+    print("Beginning training procedure")
+    model = PPO(env, alpha, gamma)
+    model.learn(n_steps)
+
+    plt.plot(range(len(model.logger['overall_loss'])), model.logger['overall_loss'])
+    plt.title("Loss of PPO over Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Epoch loss")
+    plt.ylim(top=30)
+    plt.ylim(bottom=0)
+    plt.savefig(f"../model_plots/ppo_loss_over_epochs_lr_{model.alpha}_gamma_{model.gamma}.png")
+    plt.close()
+
+    plt.plot(range(len(model.logger['overall_reward'])), model.logger['overall_reward'])
+    plt.title("Reward of PPO over Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Epoch Reward")
+    plt.savefig(f"../model_plots/ppo_reward_over_epochs_lr_{model.alpha}_gamma_{model.gamma}.png")
+    plt.close()
+
+    return model.logger['overall_loss'], model.logger['overall_reward']
+def test(env, actor_model):
+
+    print(f"Testing {actor_model}", flush=True)
+
+    # If the actor model is not specified, then exit
+    if actor_model == '':
+        raise Exception(f"Didn't specify model file. Exiting.", flush=True)
+
+    # Extract out dimensions of observation and action spaces
+    obs_dim = 2
+    act_dim = 4
+
+    # Build our policy the same way we build our actor model in PPO
+    policy = ACNN(obs_dim, act_dim)
+
+    # Load in the actor model saved by the PPO algorithm
+    policy.load_state_dict(torch.load(actor_model))
+
+    # Evaluate our policy with a separate module, eval_policy, to demonstrate
+    # that once we are done training the model/policy with ppo.py, we no longer need
+    # ppo.py since it only contains the training algorithm. The model/policy itself exists
+    # independently as a binary file that can be loaded in with torch.
+    eval_policy(policy=policy, env=env, render=True)
+
+def train_set():
+    env = RLHFEnv()
+
+    losses = {}
+    rewards = {}
+    for alpha in [0.005, 0.01, 0.02, 0.05]:
+        for gamma in [0.925]:
+            l, r = train(env, alpha, gamma, 200000)
+
+            losses[f"{alpha}:{gamma}"] = l
+            rewards[f"{alpha}:{gamma}"] = r
+
+
+    for loss in losses:
+        plt.plot(losses[loss], label=loss)
+    plt.title("Loss of PPO over Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Epoch loss")
+    plt.legend()
+    plt.savefig(f"../model_plots/combined_PPO_loss_over_epochs.png")
+    plt.close()
+
+    for reward in rewards:
+        plt.plot(rewards[reward], label=reward)
+    plt.title("Reward of PPO over Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Epoch Reward")
+    plt.legend()
+    plt.savefig(f"../model_plots/combined_PPO_reward_over_epochs.png")
+    plt.close()
+    #test(env, actor_model='ppo_actor.pth')
+
 env = RLHFEnv()
-model = PPO(env)
-model.learn(1000)
+
+train(env, 0.02, 0.925, 200000)
