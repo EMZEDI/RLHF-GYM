@@ -4,7 +4,6 @@ This file contains the class for the PPO algorithm
 Inspired by tutorial given by Eric Yang Yu: https://medium.com/analytics-vidhya/coding-ppo-from-scratch-with-pytorch-part-1-4-613dfc1b14c8
 """
 
-import gym
 import matplotlib.pyplot as plt
 
 from evalPPO import eval_policy
@@ -81,8 +80,33 @@ class PPO:
             'batch_rews': [],  # episodic returns in batch
             'actor_losses': [],  # losses of actor network in current iteration
             'overall_loss': [],
-            'overall_reward': []
+            'overall_reward': [],
+            'batch_accuracy': []
         }
+
+        ACTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        data = []
+        with open('../dataset/minigrid_RLHF_dataset.csv', 'r') as f:
+            next(f)  # Skip header
+            state = None
+            for line1, line2 in zip(f, f):  # Read two lines at a time
+                parts1 = line1.strip().split(',')
+                parts2 = line2.strip().split(',')
+
+                # Preference not used (reward modelling implicit in DPO)
+                state_x1, state_y1, action_x1, action_y1, _ = map(float, parts1)
+                state_x2, state_y2, action_x2, action_y2, _ = map(float, parts2)
+
+                # Translate actions into scalars
+                action_1 = ACTIONS.index((action_x1, action_y1))
+                action_2 = ACTIONS.index((action_x2, action_y2))
+
+                # Pair of preferred and dispreferred state-action pairs
+                data.append([(state_x1, state_y1, action_1),
+                             (state_x2, state_y2, action_2)])
+
+        # Convert data to PyTorch tensors
+        self.test = np.array(data)
 
     def learn(self, n_episodes):
         t = 0 # t = current time step
@@ -123,7 +147,10 @@ class PPO:
 
                 self.logger['actor_losses'].append(actor_loss.detach())
 
+            self.logger['batch_accuracy'].append(self.get_accuracy())
             self._log_summary()
+
+
 
             # Save our model if it's time
             if i_so_far % self.save_freq == 0:
@@ -255,6 +282,7 @@ class PPO:
         print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
         print(f"Average Loss: {avg_actor_loss}", flush=True)
+        print(f"Average Accuracy: {self.logger['batch_accuracy'][-1]}")
         print(f"Timesteps So Far: {t_so_far}", flush=True)
         print(f"Iteration took: {delta_t} secs", flush=True)
         print(f"------------------------------------------------------", flush=True)
@@ -264,6 +292,25 @@ class PPO:
         self.logger['batch_lens'] = []
         self.logger['batch_rews'] = []
         self.logger['actor_losses'] = []
+
+    def get_accuracy(self):
+        correct = 0
+        counter = 0
+        for data in self.test:
+            opt1 = data[0]
+            opt2 = data[1]
+
+            s = opt1[:2]
+
+            a, log_prob = self.get_action(s)
+
+            if a == opt1[2]:
+                correct += 1
+                counter += 1
+            elif a == opt2[2]:
+                counter += 1
+        return correct/counter
+
 
 
 def train(env, alpha, gamma, n_steps=200000):
@@ -288,7 +335,14 @@ def train(env, alpha, gamma, n_steps=200000):
     plt.savefig(f"../model_plots/ppo_reward_over_epochs_lr_{model.alpha}_gamma_{model.gamma}.png")
     plt.close()
 
-    return model.logger['overall_loss'], model.logger['overall_reward']
+    plt.plot(range(len(model.logger['batch_accuracy'])), model.logger['batch_accuracy'])
+    plt.title("Accuracy of PPO over Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.savefig(f"../model_plots/ppo_accuracy_over_epochs_lr_{model.alpha}_gamma_{model.gamma}.png")
+    plt.close()
+
+    return model.logger['overall_loss'], model.logger['overall_reward'], model.logger['batch_accuracy']
 def test(env, actor_model):
 
     print(f"Testing {actor_model}", flush=True)
