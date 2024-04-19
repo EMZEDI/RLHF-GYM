@@ -57,12 +57,13 @@ class ACNN(nn.Module):
 
         return output
 
+
 class PPO:
 
     def __init__(self, env, alpha=0.1, gamma=0.99):
         self.env = env
-        self.obs_dim = 2 # grid world is 10x10
-        self.action_dim = 4 # there are four discrete actions that can be taken (up, right, down, left)
+        self.obs_dim = 2  # grid world is 10x10
+        self.action_dim = 4  # there are four discrete actions that can be taken (up, right, down, left)
         self.actor = ACNN(self.obs_dim, self.action_dim)
         self.critic = ACNN(self.obs_dim, 1)
 
@@ -72,6 +73,7 @@ class PPO:
 
         self.a_optim = Adam(self.actor.parameters(), lr=self.alpha)
         self.c_optim = Adam(self.critic.parameters(), lr=self.alpha)
+        self.softmax = nn.Softmax(dim=0)
 
         self.logger = {
             'delta_t': time.time_ns(),
@@ -110,7 +112,7 @@ class PPO:
         self.test = np.array(data)
 
     def learn(self, n_episodes):
-        t = 0 # t = current time step
+        t = 0  # t = current time step
         i_so_far = 0
         while t < n_episodes:
             batch_s, batch_a, batch_log_probs, batch_rtgs, batch_lens = self.rollout()
@@ -126,9 +128,9 @@ class PPO:
             self.logger['t_so_far'] = t
             self.logger['i_so_far'] = i_so_far
 
-            adv_k = batch_rtgs - v.detach() # getting the advantages for the time steps
+            adv_k = batch_rtgs - v.detach()  # getting the advantages for the time steps
 
-            adv_k = (adv_k - adv_k.mean()) / (adv_k.std() + 1e-10) # normalizing the advantages
+            adv_k = (adv_k - adv_k.mean()) / (adv_k.std() + 1e-10)  # normalizing the advantages
 
             for i in range(self.n_updates_per_iteration):
                 v, curr_log_probs = self.evaluate(batch_s, batch_a)
@@ -136,7 +138,7 @@ class PPO:
                 ratios = torch.exp(curr_log_probs - batch_log_probs)
 
                 s1 = ratios * adv_k
-                s2 = torch.clamp(ratios, 1-self.clip, 1 + self.clip)
+                s2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip)
 
                 actor_loss = (-torch.min(s1, s2)).mean()
                 self.a_optim.zero_grad()
@@ -150,7 +152,6 @@ class PPO:
 
                 self.logger['actor_losses'].append(actor_loss.detach())
 
-
             self._log_summary()
 
             # Save our model if it's time
@@ -159,8 +160,8 @@ class PPO:
                 torch.save(self.critic.state_dict(), './ppo_critic.pth')
 
     def _init_hp(self, alpha, gamma):
-        self.steps_per_batch = 10000
-        self.max_episode = 500 # maximum timesteps per episode: prevents episode from runnning forever
+        self.steps_per_batch = 5000
+        self.max_episode = 200  # maximum timesteps per episode: prevents episode from runnning forever
         self.gamma = gamma
         self.n_updates_per_iteration = 10
         self.clip = 0.2
@@ -212,16 +213,18 @@ class PPO:
         return batch_s, batch_a, batch_log_probs, batch_rtgs, batch_lens
 
     def get_action(self, s):
-        mean = self.actor(s) # get mean action from the actor network
+        mean = self.actor(s)  # get mean action from the actor network
 
-        dist = MultivariateNormal(mean, self.cov_mat) # get multivariate distribution to help with exploring
+        # mean = torch.log(mean)
+        dist = MultivariateNormal(mean, self.cov_mat)  # get multivariate distribution to help with exploring
         a = dist.sample()
         log_prob = dist.log_prob(a)
-        if a.ndim == 1:
-            a = a.argmax()
+        a = np.random.choice(4, p=self.softmax(a).detach().numpy())
+        """if a.ndim == 1:
+            a = np.random.choice(4, p=self.softmax(a).detach().numpy())
         else:
-            a = a.argmax(dim=1)
-        return a.detach().numpy(), log_prob.detach()
+            a = np.random.choice(4, p=self.softmax(a).detach().numpy())"""
+        return np.array(a), log_prob.detach()
 
     def rtgs_comp(self, batch_r):
         batch_rtgs = []
@@ -268,7 +271,6 @@ class PPO:
         avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
 
-
         self.logger['overall_reward'].append(avg_ep_rews)
         self.logger['overall_loss'].append(avg_actor_loss)
 
@@ -312,12 +314,10 @@ class PPO:
                 counter += 1
             elif a == opt2[2]:
                 counter += 1
-        return correct/counter
-
+        return correct / counter
 
 
 def train(env, alpha, gamma, n_steps=200000):
-
     print("Beginning training procedure")
     model = PPO(env, alpha, gamma)
     model.learn(n_steps)
@@ -346,8 +346,9 @@ def train(env, alpha, gamma, n_steps=200000):
     plt.close()
 
     return model.logger['overall_loss'], model.logger['overall_reward'], model.logger['batch_accuracy']
-def test(env, actor_model):
 
+
+def test(env, actor_model):
     print(f"Testing {actor_model}", flush=True)
 
     # If the actor model is not specified, then exit
@@ -370,18 +371,18 @@ def test(env, actor_model):
     # independently as a binary file that can be loaded in with torch.
     eval_policy(policy=policy, env=env, render=True)
 
-def train_set():
-    env = RewardModelSimulator()
 
+def train_set(env):
     losses = {}
     rewards = {}
+    accuracy = {}
     for alpha in [0.005, 0.01, 0.02, 0.05]:
-        for gamma in [0.925]:
-            l, r = train(env, alpha, gamma, 200000)
+        for gamma in [0.925, 0.95, 0.99]:
+            l, r, a = train(env, alpha, gamma, 200000)
 
             losses[f"{alpha}:{gamma}"] = l
             rewards[f"{alpha}:{gamma}"] = r
-
+            accuracy[f"{alpha}:{gamma}"] = a
 
     for loss in losses:
         plt.plot(losses[loss], label=loss)
@@ -400,8 +401,18 @@ def train_set():
     plt.legend()
     plt.savefig(f"../model_plots/combined_PPO_reward_over_epochs.png")
     plt.close()
-    #test(env, actor_model='ppo_actor.pth')
 
-env = RewardModelSimulator()
+    for acc in accuracy:
+        plt.plot(accuracy[acc], label=acc)
+    plt.title("Accuracy of PPO over Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    plt.savefig(f"../model_plots/combined_PPO_accuracy_over_epochs.png")
+    plt.close()
+    # test(env, actor_model='ppo_actor.pth')
 
-train(env, 0.02, 0.925, 200000)
+
+if __name__ == "__main__":
+    env = RewardModelSimulator()
+    train(env, 0.01, 0.99, 100000)
