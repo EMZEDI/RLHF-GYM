@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam
 from torch.distributions import MultivariateNormal
+from IPython.display import clear_output
 
 
 class ACNN(nn.Module):
@@ -116,6 +117,8 @@ class PPO:
             t += np.sum(batch_lens)
             v, _ = self.evaluate(batch_s, batch_a)
 
+            self.logger['batch_accuracy'].append(self.get_accuracy())
+
             # Increment the number of iterations
             i_so_far += 1
 
@@ -147,10 +150,8 @@ class PPO:
 
                 self.logger['actor_losses'].append(actor_loss.detach())
 
-            self.logger['batch_accuracy'].append(self.get_accuracy())
+
             self._log_summary()
-
-
 
             # Save our model if it's time
             if i_so_far % self.save_freq == 0:
@@ -296,7 +297,9 @@ class PPO:
     def get_accuracy(self):
         correct = 0
         counter = 0
-        for data in self.test:
+        np.random.shuffle(self.test)
+        for data in self.test[:100000]:
+
             opt1 = data[0]
             opt2 = data[1]
 
