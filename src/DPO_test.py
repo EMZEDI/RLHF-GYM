@@ -7,11 +7,14 @@ from tqdm import tqdm
 
 from DPO import PolicyModel
 
-# Define your PolicyModel
+import gym
+import matplotlib.pyplot as plt
+from rewardmodelsimulator import RewardModelSimulator
+
 policy_model = PolicyModel()
 
 # Load the saved state dictionary
-state_dict = torch.load('models/dpo_policy_model.pth')
+state_dict = torch.load('models/dpo_reference_model.pth')
 
 # Load the state dictionary into the model
 policy_model.load_state_dict(state_dict)
@@ -22,10 +25,12 @@ policy_model.to(device)
 # Set the model to evaluation mode
 policy_model.eval()
 
-# Convert inputs to tensors
-state_x = torch.tensor([0.0], device=device)
-state_y = torch.tensor([0.0], device=device)
+for x in range (30):
+    for y in range (30):
+        # Convert inputs to tensors
+        state_x = torch.tensor([x], device=device, dtype=torch.float)
+        state_y = torch.tensor([y], device=device, dtype=torch.float)
 
-output = torch.exp(policy_model(state_x, state_y)).tolist()
+        output = torch.exp(policy_model(state_x, state_y)).tolist()
 
-print(output)
+        print(f'Probs at state ({x}, {y}): {output[0]}')

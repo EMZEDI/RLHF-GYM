@@ -5,12 +5,14 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import math
 from tqdm import tqdm
+from RLHFenvironment import RLHFEnv
+import matplotlib.pyplot as plt
 
 ACTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
 
 def read_preference_data():
     data = []
-    with open('dataset/minigrid_RLHF_dataset.csv', 'r') as f:
+    with open('../dataset/minigrid_RLHF_dataset.csv', 'r') as f:
         next(f)  # Skip header
         state = None
         for line1, line2 in zip(f, f):  # Read two lines at a time
@@ -32,17 +34,25 @@ def read_preference_data():
 
 # Policy Model Definition
 class PolicyModel(nn.Module):
-    def __init__(self):
+    def __init__(self, beta=0.1):
         super(PolicyModel, self).__init__()
-        self.fc1 = nn.Linear(2, 16)
-        self.fc2 = nn.Linear(16, 4) # 4 actions
+        self.fc1 = nn.Linear(2, 32)
+        self.fc2 = nn.Linear(32, 16)
+        self.fc3 = nn.Linear(16, 4) # 4 actions
+        self.logger = {
+            'loss': [],  # stores loss computation at each epoch
+            'accuracy': [], # stores accuracy computation at each epoch
+            'reward': [] # cumulative reward received from model at each epoch, averaged over 50 iterations
+        }
+        self.beta = beta
     
     def forward(self, state_x, state_y):
         state_x = state_x.unsqueeze(1)
         state_y = state_y.unsqueeze(1)
         x = torch.cat((state_x, state_y), dim=1)
         x = torch.relu(self.fc1(x))
-        x = torch.log_softmax(self.fc2(x), dim=1)
+        x = torch.relu(self.fc2(x))
+        x = torch.log_softmax(self.fc3(x), dim=1)
         return x
 
 # DPO Loss Function, adapted from https://arxiv.org/abs/2305.18290
@@ -77,6 +87,90 @@ def dpo_loss(policy_logprobs, ref_logprobs, yw_action_indices, yl_action_indices
     # print(f'rewards: {rewards}')
     return losses, rewards
 
+# Simulates the cumulative reward received by the current policy model. Called every epoch to demonstrate convergence.
+def simulate_rewards(policy_model, env, device, num_episodes, max_iters_per_episode):
+    # This is just a reward simulation, the model should not learn from it
+    policy_model.eval()
+    cumulative_rewards = []
+
+    for episode in range(num_episodes):
+        # initialize environment
+        state = env.reset()
+        cumulative_reward = 0
+        actions = []
+        states =[]
+
+        for i in range(max_iters_per_episode):
+            # convert state to tensor format
+            state_x = torch.tensor([state[0]], device=device, dtype=torch.float)
+            state_y = torch.tensor([state[1]], device=device, dtype=torch.float)
+
+            # weighted action selection
+            action = torch.multinomial(torch.exp(policy_model(state_x, state_y)), 1)
+            actions.append(action.item())
+            states.append(state)
+            state, reward, done, _ = env.step(action)
+            cumulative_reward += reward
+            
+            if done: break
+
+        cumulative_rewards.append(cumulative_reward)
+        # if cumulative_reward > -200:
+        #     print(f'Reward: {cumulative_reward}\n\tactions selected: {actions}\n\tstates visited: {states}')
+        # print(f'sim finished with reward {cumulative_reward}')
+
+    # Return to training
+    policy_model.train()
+
+    # print(f'Rewards: {cumulative_rewards}')
+    # print(f'Actions: {actions}')
+
+    # Return mean cumulative reward
+    return sum(cumulative_rewards)/len(cumulative_rewards)
+
+def plot_results(model):
+    loss = model.logger['loss']
+    accuracy = model.logger['accuracy']
+    reward = model.logger['reward']
+
+    epochs = len(loss)  # Number of epochs
+
+    # Plot and save Loss
+    plt.figure(figsize=(8, 6))
+    plt.plot(range(epochs), loss, label='Loss', color='blue')
+    plt.title('Training Loss Over Time - DPO')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss (DPO loss function)')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig('../model_plots/dpo_loss.png', dpi=300)
+    plt.close()
+
+    # Plot and save Accuracy
+    plt.figure(figsize=(8, 6))
+    plt.plot(range(epochs), accuracy, label='Accuracy', color='green')
+    plt.title('Training Accuracy Over Time - DPO')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (% preference data correctly modelled)')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig('../model_plots/dpo_accuracy.png', dpi=300)
+    plt.close()
+
+    # Plot and save Reward
+    plt.figure(figsize=(8, 6))
+    plt.plot(range(epochs), reward, label='Reward', color='red')
+    plt.title('Cumulative Reward Over Time - DPO')
+    plt.xlabel('Epoch')
+    plt.ylabel('Cumulative Reward (Averaged over 50 simulations)')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig('../model_plots/dpo_reward.png', dpi=300)
+    plt.close()
+
+    print('plots generated and saved.')
+
+
 if __name__ == '__main__':
 
     if (torch.cuda.is_available()):
@@ -90,31 +184,13 @@ if __name__ == '__main__':
 
     # Step 1: Data Preparation
     # Load the synthetic dataset
-    data = []
-    with open('dataset/minigrid_RLHF_dataset.csv', 'r') as f:
-        next(f)  # Skip header
-        state = None
-        for line1, line2 in zip(f, f):  # Read two lines at a time
-            parts1 = line1.strip().split(',')
-            parts2 = line2.strip().split(',')
-
-            # Preference not used (reward modelling implicit in DPO)
-            state_x1, state_y1, action_x1, action_y1, _ = map(float, parts1)
-            state_x2, state_y2, action_x2, action_y2, _ = map(float, parts2)
-
-            # Translate actions into scalars
-            action_1 = ACTIONS.index((action_x1, action_y1))
-            action_2 = ACTIONS.index((action_x2, action_y2))
-
-            # Pair of preferred and dispreferred state-action pairs
-            data.append([(state_x1, state_y1, action_1),
-                        (state_x2, state_y2, action_2)])
+    data = read_preference_data()
 
     # Convert data to PyTorch tensors
     data = [torch.tensor(pair, dtype=torch.float32) for pair in data]
 
     # Split data into training and validation sets
-    split = int(0.95 * len(data))  # Use 95% of data for training, 5% for validation
+    split = int(0.95 * len(data))  # Same splits as reward model for fair comparison
     train_data = data[:split]
     valid_data = data[split:]
 
@@ -135,7 +211,7 @@ if __name__ == '__main__':
     ref_model = PolicyModel().to(device)
 
     # Save reference model for more efficient training
-    if not os.path.exists('models/dpo_reference_model.pth'):
+    if not os.path.exists('../models/dpo_reference_model.pth'):
         # Loss and optimizer
         criterion = nn.CrossEntropyLoss()
         ref_optimizer = optim.Adam(ref_model.parameters(), lr=0.001)
@@ -168,23 +244,29 @@ if __name__ == '__main__':
                 ref_optimizer.step()
 
         print(f"Reference Model Trained")
-        torch.save(ref_model.state_dict(), 'models/dpo_reference_model.pth')
+        torch.save(ref_model.state_dict(), '../models/dpo_reference_model.pth')
     else:
-        ref_model.load_state_dict(torch.load('models/dpo_reference_model.pth'))
+        ref_model.load_state_dict(torch.load('../models/dpo_reference_model.pth'))
         print(f"Reference Model Loaded")
+    
+    # Reference Model should no longer learn
+    ref_model.eval()
 
     # Step 3: Training Process
     # Initialize model, optimizer, loss function, and regularization
-    policy_model = PolicyModel().to(device)
+    policy_model = PolicyModel(beta=0.9).to(device)
     # Match hyperparameters to original paper as much as possible
     optimizer = optim.RMSprop(policy_model.parameters(), lr=1e-6)
     regularization = nn.L1Loss()  # L1 regularization
-    beta = 1
+    beta = policy_model.beta
 
     # Training loop
     best_valid_loss = float('inf')
     patience = 5  # Number of epochs to wait for improvement before early stopping
     counter = 0
+
+    # Environment (for reward simulation)
+    env = RLHFEnv()
 
     for epoch in range(100):  # Example: Train for 100 epochs
         # Training
@@ -236,9 +318,17 @@ if __name__ == '__main__':
         
         train_loss /= len(train_loader)
         train_accuracy = train_correct / len(train_loader.dataset)
+        cumulative_reward = simulate_rewards(policy_model, env, device, 50, 200)
 
+        policy_model.logger['loss'].append(train_loss)
         print(f'train loss: {train_loss}')
+        policy_model.logger['accuracy'].append(train_accuracy)
         print(f'train accuracy: {train_accuracy}')
+        policy_model.logger['reward'].append(cumulative_reward)
+        print(f'cumulative reward: {cumulative_reward}')
     
     # Save policy model
-    torch.save(policy_model.state_dict(), 'models/dpo_policy_model.pth')
+    torch.save(policy_model.state_dict(), '../models/dpo_policy_model.pth')
+
+    # Plot results
+    plot_results(policy_model)
