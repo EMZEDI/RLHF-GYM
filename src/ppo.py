@@ -6,8 +6,8 @@ Inspired by tutorial given by Eric Yang Yu: https://medium.com/analytics-vidhya/
 
 import matplotlib.pyplot as plt
 
-from evalPPO import eval_policy
-from rewardmodelsimulator import RewardModelSimulator
+from src.evalPPO import eval_policy
+from src.rewardmodelsimulator import RewardModelSimulator
 import time
 import numpy as np
 import torch
@@ -34,6 +34,7 @@ class ACNN(nn.Module):
                 None
         """
         super(ACNN, self).__init__()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.layer1 = nn.Linear(in_dim, 128)
         self.layer2 = nn.Linear(128, out_dim)
@@ -50,6 +51,8 @@ class ACNN(nn.Module):
             obs = np.asarray([obs])
             obs = torch.tensor(obs, dtype=torch.float)
 
+        obs = obs.to(self.device)
+
         """if obs.ndim == 1:
             obs = torch.reshape(obs, (obs.shape[0], 1))"""
         logits = nn.functional.relu(self.layer1(obs))
@@ -61,15 +64,16 @@ class ACNN(nn.Module):
 class PPO:
 
     def __init__(self, env, alpha=0.1, gamma=0.99):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.env = env
         self.obs_dim = 2  # grid world is 10x10
         self.action_dim = 4  # there are four discrete actions that can be taken (up, right, down, left)
-        self.actor = ACNN(self.obs_dim, self.action_dim)
-        self.critic = ACNN(self.obs_dim, 1)
+        self.actor = ACNN(self.obs_dim, self.action_dim).to(self.device)
+        self.critic = ACNN(self.obs_dim, 1).to(self.device)
 
         self._init_hp(alpha, gamma)
-        self.cov_var = torch.full(size=(self.action_dim,), fill_value=0.5)
-        self.cov_mat = torch.diag(self.cov_var)
+        self.cov_var = torch.full(size=(self.action_dim,), fill_value=0.5).to(self.device)
+        self.cov_mat = torch.diag(self.cov_var).to(self.device)
 
         self.a_optim = Adam(self.actor.parameters(), lr=self.alpha)
         self.c_optim = Adam(self.critic.parameters(), lr=self.alpha)
@@ -89,7 +93,7 @@ class PPO:
 
         ACTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         data = []
-        with open('../dataset/minigrid_RLHF_dataset.csv', 'r') as f:
+        with open('dataset/minigrid_RLHF_dataset.csv', 'r') as f:
             next(f)  # Skip header
             state = None
             for line1, line2 in zip(f, f):  # Read two lines at a time
@@ -201,9 +205,9 @@ class PPO:
             batch_lens.append(ep_step + 1)  # plus 1 because timestep starts at 0
             batch_r.append(episode_r)
 
-        batch_s = torch.tensor(batch_s, dtype=torch.float)
-        batch_a = torch.tensor(batch_a, dtype=torch.float)
-        batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
+        batch_s = torch.tensor(batch_s, dtype=torch.float).to(self.device)
+        batch_a = torch.tensor(batch_a, dtype=torch.float).to(self.device)
+        batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float).to(self.device)
         batch_rtgs = self.rtgs_comp(batch_r)
 
         # Log the episodic returns and episodic lengths in this batch.
@@ -214,6 +218,7 @@ class PPO:
 
     def get_action(self, s):
         mean = self.actor(s)  # get mean action from the actor network
+        mean = mean.to(self.device)
 
         # mean = torch.log(mean)
         dist = MultivariateNormal(mean, self.cov_mat)  # get multivariate distribution to help with exploring
@@ -235,6 +240,7 @@ class PPO:
                 discount_r = r + discount_r * self.gamma
                 batch_rtgs.insert(0, discount_r)
         batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float)
+        batch_rtgs = batch_rtgs.to(self.device)
         return batch_rtgs
 
     def evaluate(self, batch_obs, batch_acts):
