@@ -376,7 +376,7 @@ def train_set(env):
     losses = {}
     rewards = {}
     accuracy = {}
-    for alpha in [0.005, 0.01, 0.02, 0.05]:
+    for alpha in [0.0001,0.001, 0.005, 0.01]:
         for gamma in [0.925, 0.95, 0.99]:
             l, r, a = train(env, alpha, gamma, 200000)
 
@@ -410,9 +410,9 @@ def train_set(env):
     plt.legend()
     plt.savefig(f"../model_plots/combined_PPO_accuracy_over_epochs.png")
     plt.close()
-    # test(env, actor_model='ppo_actor.pth')
+    # test(env, actor_model='ppo_actor.pth'
 
 
 if __name__ == "__main__":
     env = RewardModelSimulator()
-    train(env, 0.01, 0.99, 100000)
+    train_set(env)
