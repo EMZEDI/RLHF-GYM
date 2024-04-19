@@ -7,7 +7,7 @@ Inspired by tutorial given by Eric Yang Yu: https://medium.com/analytics-vidhya/
 import matplotlib.pyplot as plt
 
 from evalPPO import eval_policy
-from RLHFenvironment import RLHFEnv
+from rewardmodelsimulator import RewardModelSimulator
 import time
 import numpy as np
 import torch
@@ -371,18 +371,16 @@ def test(env, actor_model):
     eval_policy(policy=policy, env=env, render=True)
 
 def train_set():
-    env = RLHFEnv()
+    env = RewardModelSimulator()
 
     losses = {}
     rewards = {}
-    accuracy = {}
     for alpha in [0.005, 0.01, 0.02, 0.05]:
-        for gamma in [0.925, 0.95, 0.99]:
-            l, r, a = train(env, alpha, gamma, 200000)
+        for gamma in [0.925]:
+            l, r = train(env, alpha, gamma, 200000)
 
             losses[f"{alpha}:{gamma}"] = l
             rewards[f"{alpha}:{gamma}"] = r
-            accuracy[f"{alpha}:{gamma}"] = a
 
 
     for loss in losses:
@@ -402,15 +400,8 @@ def train_set():
     plt.legend()
     plt.savefig(f"../model_plots/combined_PPO_reward_over_epochs.png")
     plt.close()
+    #test(env, actor_model='ppo_actor.pth')
 
-    for acc in accuracy:
-        plt.plot(accuracy[acc], label=reward)
-    plt.title("Accuracy of PPO over Epochs")
-    plt.xlabel("Epoch")
-    plt.ylabel("Accuracy")
-    plt.legend()
-    plt.savefig(f"../model_plots/combined_PPO_accuracy_over_epochs.png")
-    plt.close()
+env = RewardModelSimulator()
 
-if __name__ == "__main__":
-    train_set()
+train(env, 0.02, 0.925, 200000)

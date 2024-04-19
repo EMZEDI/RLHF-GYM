@@ -44,14 +44,13 @@ for _ in range(num_samples):
         s = env.reset()
     a1 = np.random.randint(4)  # Random action 1
 
-    # Ensure a1 leads to a valid state
-    while not env.is_valid_state(env.possible_next_state(s, a1)):
-        a1 = np.random.randint(4)
-
     # Ensure a2 is not equal to a1 and leads to a valid state
     a2 = np.random.randint(4)
-    while a2 == a1 or not env.is_valid_state(env.possible_next_state(s, a2)):
+    while a2 == a1:
         a2 = np.random.randint(4)
+
+    while (not env.is_valid_state(env.possible_next_state(s, a2)) and not env.is_valid_state(env.possible_next_state(s, a1))):
+        a1 = np.random.randint(4)
 
     # Deep copy the environment to avoid modifying the original one
     env_copy = deepcopy(env)
@@ -59,6 +58,22 @@ for _ in range(num_samples):
     # Get the states and rewards for each action
     s_prime_a1, reward_a1, _, _ = env.step(a1)
     s_prime_a2, reward_a2, _, _ = env_copy.step(a2)
+
+    # check if the state is in the state space
+    if (not env.is_valid_state(s_prime_a1)):
+        reward_a1 = np.inf
+        # tmp_state = s_prime_a1
+        # s_prime_a1 = s_prime_a2
+        # s_prime_a2 = tmp_state
+        # tmp_reward = reward_a1
+        # reward_a1 = reward_a2
+        # reward_a2 = tmp_reward
+        # tmp_action = a1
+        # a1 = a2
+        # a2 = tmp_action
+    
+    if (not env.is_valid_state(s_prime_a2)):
+        reward_a2 = np.inf
 
     # Apply epsilon noise universally
     if np.random.uniform() < epsilon:
