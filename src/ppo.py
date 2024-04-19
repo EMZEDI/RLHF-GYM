@@ -6,8 +6,9 @@ Inspired by tutorial given by Eric Yang Yu: https://medium.com/analytics-vidhya/
 
 import matplotlib.pyplot as plt
 
-from src.evalPPO import eval_policy
-from src.rewardmodelsimulator import RewardModelSimulator
+from evalPPO import eval_policy
+from rewardmodelsimulator import RewardModelSimulator
+from RLHFenvironment import RLHFEnv
 import time
 import numpy as np
 import torch
@@ -36,8 +37,9 @@ class ACNN(nn.Module):
         super(ACNN, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.layer1 = nn.Linear(in_dim, 128)
-        self.layer2 = nn.Linear(128, out_dim)
+        self.layer1 = nn.Linear(in_dim, 32)
+        self.layer2 = nn.Linear(32, 16)
+        self.layer3 = nn.Linear(16, out_dim)
 
     def forward(self, obs):
 
@@ -56,27 +58,29 @@ class ACNN(nn.Module):
         """if obs.ndim == 1:
             obs = torch.reshape(obs, (obs.shape[0], 1))"""
         logits = nn.functional.relu(self.layer1(obs))
-        output = self.layer2(logits)
+        logits = nn.functional.relu(self.layer2(logits))
+        output = self.layer3(logits)
 
         return output
 
 
 class PPO:
 
-    def __init__(self, env, alpha=0.1, gamma=0.99):
+    def __init__(self, env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=1e-4, alpha_c=0.1, gamma=0.925):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.env = env
+        self.test_env = test_env
         self.obs_dim = 2  # grid world is 10x10
         self.action_dim = 4  # there are four discrete actions that can be taken (up, right, down, left)
         self.actor = ACNN(self.obs_dim, self.action_dim).to(self.device)
         self.critic = ACNN(self.obs_dim, 1).to(self.device)
 
-        self._init_hp(alpha, gamma)
+        self._init_hp(alpha, alpha_c, gamma)
         self.cov_var = torch.full(size=(self.action_dim,), fill_value=0.5).to(self.device)
         self.cov_mat = torch.diag(self.cov_var).to(self.device)
 
         self.a_optim = Adam(self.actor.parameters(), lr=self.alpha)
-        self.c_optim = Adam(self.critic.parameters(), lr=self.alpha)
+        self.c_optim = Adam(self.critic.parameters(), lr=self.alpha_c)
         self.softmax = nn.Softmax(dim=0)
 
         self.logger = {
@@ -85,15 +89,17 @@ class PPO:
             'i_so_far': 0,  # iterations so far
             'batch_lens': [],  # episodic lengths in batch
             'batch_rews': [],  # episodic returns in batch
+            'batch_test_rews': [],
             'actor_losses': [],  # losses of actor network in current iteration
             'overall_loss': [],
             'overall_reward': [],
+            'overall_test_rews': [],
             'batch_accuracy': []
         }
 
         ACTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         data = []
-        with open('dataset/minigrid_RLHF_dataset.csv', 'r') as f:
+        with open('../dataset/minigrid_RLHF_dataset.csv', 'r') as f:
             next(f)  # Skip header
             state = None
             for line1, line2 in zip(f, f):  # Read two lines at a time
@@ -115,12 +121,14 @@ class PPO:
         # Convert data to PyTorch tensors
         self.test = np.array(data)
 
+
     def learn(self, n_episodes):
         t = 0  # t = current time step
         i_so_far = 0
         while t < n_episodes:
             batch_s, batch_a, batch_log_probs, batch_rtgs, batch_lens = self.rollout()
             t += np.sum(batch_lens)
+
             v, _ = self.evaluate(batch_s, batch_a)
 
             self.logger['batch_accuracy'].append(self.get_accuracy())
@@ -133,7 +141,6 @@ class PPO:
             self.logger['i_so_far'] = i_so_far
 
             adv_k = batch_rtgs - v.detach()  # getting the advantages for the time steps
-
             adv_k = (adv_k - adv_k.mean()) / (adv_k.std() + 1e-10)  # normalizing the advantages
 
             for i in range(self.n_updates_per_iteration):
@@ -142,19 +149,20 @@ class PPO:
                 ratios = torch.exp(curr_log_probs - batch_log_probs)
 
                 s1 = ratios * adv_k
-                s2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip)
+                s2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * adv_k
 
                 actor_loss = (-torch.min(s1, s2)).mean()
                 self.a_optim.zero_grad()
                 actor_loss.backward()
                 self.a_optim.step()
 
-                critic_loss = nn.MSELoss()(v, batch_log_probs)
+                critic_loss = nn.MSELoss()(v, batch_rtgs)
                 self.c_optim.zero_grad()
                 critic_loss.backward()
                 self.c_optim.step()
 
                 self.logger['actor_losses'].append(actor_loss.detach())
+                #self.logger['critic_losses'].append(critic_loss.detach())
 
             self._log_summary()
 
@@ -163,13 +171,14 @@ class PPO:
                 torch.save(self.actor.state_dict(), './ppo_actor.pth')
                 torch.save(self.critic.state_dict(), './ppo_critic.pth')
 
-    def _init_hp(self, alpha, gamma):
-        self.steps_per_batch = 5000
+    def _init_hp(self, alpha, alpha_c, gamma):
+        self.steps_per_batch = 1000
         self.max_episode = 200  # maximum timesteps per episode: prevents episode from runnning forever
         self.gamma = gamma
         self.n_updates_per_iteration = 10
         self.clip = 0.2
         self.alpha = alpha
+        self.alpha_c = alpha_c
         # Miscellaneous parameters
         self.render = True  # If we should render during rollout
         self.render_every_i = 10  # Only render every n iterations
@@ -195,7 +204,7 @@ class PPO:
                 batch_t += 1
                 batch_s.append(input)
 
-                a, log_prob = self.get_action(input)
+                a, log_prob, a_probs = self.get_action(input)
                 state, reward, done, _ = self.env.step(a)
 
                 episode_r.append(reward)
@@ -211,6 +220,7 @@ class PPO:
         batch_rtgs = self.rtgs_comp(batch_r)
 
         # Log the episodic returns and episodic lengths in this batch.
+        self.logger['batch_test_rews'] = self.get_test_rewards()
         self.logger['batch_rews'] = batch_r
         self.logger['batch_lens'] = batch_lens
 
@@ -224,12 +234,14 @@ class PPO:
         dist = MultivariateNormal(mean, self.cov_mat)  # get multivariate distribution to help with exploring
         a = dist.sample()
         log_prob = dist.log_prob(a)
-        a = np.random.choice(4, p=self.softmax(a).detach().numpy())
+        action_probs = self.softmax(a).detach().numpy()
+        a = np.random.choice(4, p=action_probs)
+        #a = np.argmax(a)
         """if a.ndim == 1:
             a = np.random.choice(4, p=self.softmax(a).detach().numpy())
         else:
             a = np.random.choice(4, p=self.softmax(a).detach().numpy())"""
-        return np.array(a), log_prob.detach()
+        return np.array(a), log_prob.detach(), action_probs
 
     def rtgs_comp(self, batch_r):
         batch_rtgs = []
@@ -275,6 +287,7 @@ class PPO:
         i_so_far = self.logger['i_so_far']
         avg_ep_lens = np.mean(self.logger['batch_lens'])
         avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
+        avg_test_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_test_rews']])
         avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
 
         self.logger['overall_reward'].append(avg_ep_rews)
@@ -290,6 +303,7 @@ class PPO:
         print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
         print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
+        print(f"Average Test Episodic Return: {avg_test_rews}", flush=True)
         print(f"Average Loss: {avg_actor_loss}", flush=True)
         print(f"Average Accuracy: {self.logger['batch_accuracy'][-1]}")
         print(f"Timesteps So Far: {t_so_far}", flush=True)
@@ -303,29 +317,78 @@ class PPO:
         self.logger['actor_losses'] = []
 
     def get_accuracy(self):
+        self.actor.eval()
         correct = 0
         counter = 0
         np.random.shuffle(self.test)
-        for data in self.test[:100000]:
+
+        # store action values for all states
+        action_probs = [[0 for y in range(30) ] for x in range(30)]
+        for x in range(30):
+            for y in range(30):
+                a, b, c = self.get_action(np.array([x, y]))
+                action_probs[x][y] = [a, b]
+
+        for data in self.test[:3000]:
 
             opt1 = data[0]
             opt2 = data[1]
 
             s = opt1[:2]
 
-            a, log_prob = self.get_action(s)
+            a, log_prob = action_probs[int(s[0])][int(s[1])]
 
             if a == opt1[2]:
                 correct += 1
                 counter += 1
             elif a == opt2[2]:
                 counter += 1
+
+        self.actor.train()
         return correct / counter
 
+    def get_test_rewards(self):
+        # Simulate test rewards
+        self.actor.eval()
+        # store action values for all states
+        action_probs = [[0 for y in range(30)] for x in range(30)]
+        for x in range(30):
+            for y in range(30):
+                a, b, c = self.get_action(np.array([x, y]))
+                action_probs[x][y] = [a, b]
 
-def train(env, alpha, gamma, n_steps=200000):
+        test_rewards = []
+
+        for episode in range(50):
+            # initialize environment
+            state = self.test_env.reset()
+            cumulative_rewards = []
+
+            for i in range(200):
+                # select action based on policy
+                a, log_prob = action_probs[int(state[0])][int(state[1])]
+
+                state, reward, done, _ = self.test_env.step(a)
+
+                cumulative_rewards.append(reward)
+                if done: break
+
+            test_rewards.append(cumulative_rewards)
+
+            self.actor.train()
+
+        return test_rewards
+
+    def see_state_choices(self):
+        for x in range(30):
+            for y in range(30):
+                action, log_prob, action_probs = self.get_action(np.array([x,y]))
+                print(f"State ({x},{y}) : {action_probs}")
+
+
+def train(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=0.01, gamma=0.925, n_steps=100000):
     print("Beginning training procedure")
-    model = PPO(env, alpha, gamma)
+    model = PPO(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=1e-2, alpha_c=0.3, gamma=0.925)
     model.learn(n_steps)
 
     plt.plot(range(len(model.logger['overall_loss'])), model.logger['overall_loss'])
@@ -350,6 +413,8 @@ def train(env, alpha, gamma, n_steps=200000):
     plt.ylabel("Accuracy")
     plt.savefig(f"../model_plots/ppo_accuracy_over_epochs_lr_{model.alpha}_gamma_{model.gamma}.png")
     plt.close()
+
+    model.see_state_choices()
 
     return model.logger['overall_loss'], model.logger['overall_reward'], model.logger['batch_accuracy']
 
@@ -382,7 +447,7 @@ def train_set(env):
     losses = {}
     rewards = {}
     accuracy = {}
-    for alpha in [0.0001,0.001, 0.005, 0.01]:
+    for alpha in [0.001, 0.005, 0.01, 0.02]:
         for gamma in [0.925, 0.95, 0.99]:
             l, r, a = train(env, alpha, gamma, 200000)
 
@@ -420,5 +485,4 @@ def train_set(env):
 
 
 if __name__ == "__main__":
-    env = RewardModelSimulator()
-    train_set(env)
+    train()

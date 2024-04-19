@@ -25,3 +25,7 @@ class RLHFEnv(RewardModelSimulator):
 
         # If the new state is not the goal state, return the new state and a reward of -1
         return self.state, -1, False, {}
+
+    def reset(self):
+        self.state = np.array([0, 0])
+        return self.state
