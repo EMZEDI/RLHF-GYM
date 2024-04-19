@@ -7,8 +7,8 @@ Inspired by tutorial given by Eric Yang Yu: https://medium.com/analytics-vidhya/
 import matplotlib.pyplot as plt
 
 from evalPPO import eval_policy
-from rewardmodelsimulator import RewardModelSimulator
-from RLHFenvironment import RLHFEnv
+from src.rewardmodelsimulator import RewardModelSimulator
+from src.RLHFenvironment import RLHFEnv
 import time
 import numpy as np
 import torch
@@ -16,24 +16,10 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.distributions import MultivariateNormal
 from IPython.display import clear_output
-
+import pandas as pd
 
 class ACNN(nn.Module):
-    """
-    Defining an NN architecture to be used for the actor critic approximations
-    """
-
     def __init__(self, in_dim, out_dim):
-        """
-            Initialize the network and set up the layers.
-
-            Parameters:
-                in_dim - input dimensions as an int
-                out_dim - output dimensions as an int
-
-            Return:
-                None
-        """
         super(ACNN, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -42,21 +28,12 @@ class ACNN(nn.Module):
         self.layer3 = nn.Linear(16, out_dim)
 
     def forward(self, obs):
+        # Ensure that obs is a tensor
+        if not isinstance(obs, torch.Tensor):
+            obs = torch.tensor(obs, dtype=torch.float, device=self.device)
+        else:
+            obs = obs.to(self.device)
 
-        # Convert observation to tensor if it's a numpy array
-        if isinstance(obs, tuple):
-            obs = np.asarray(obs)
-            obs = torch.tensor(obs, dtype=torch.float)
-        elif isinstance(obs, np.ndarray):
-            obs = torch.tensor(obs, dtype=torch.float)
-        elif isinstance(obs, np.int32):
-            obs = np.asarray([obs])
-            obs = torch.tensor(obs, dtype=torch.float)
-
-        obs = obs.to(self.device)
-
-        """if obs.ndim == 1:
-            obs = torch.reshape(obs, (obs.shape[0], 1))"""
         logits = nn.functional.relu(self.layer1(obs))
         logits = nn.functional.relu(self.layer2(logits))
         output = self.layer3(logits)
@@ -76,8 +53,8 @@ class PPO:
         self.critic = ACNN(self.obs_dim, 1).to(self.device)
 
         self._init_hp(alpha, alpha_c, gamma)
-        self.cov_var = torch.full(size=(self.action_dim,), fill_value=0.5).to(self.device)
-        self.cov_mat = torch.diag(self.cov_var).to(self.device)
+        self.cov_var = torch.full(size=(self.action_dim,), fill_value=0.5, device=self.device)
+        self.cov_mat = torch.diag(self.cov_var)
 
         self.a_optim = Adam(self.actor.parameters(), lr=self.alpha)
         self.c_optim = Adam(self.critic.parameters(), lr=self.alpha_c)
@@ -97,26 +74,26 @@ class PPO:
             'batch_accuracy': []
         }
 
+        self.load_data()
+
+    def load_data(self):
         ACTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         data = []
-        with open('../dataset/minigrid_RLHF_dataset.csv', 'r') as f:
-            next(f)  # Skip header
-            state = None
-            for line1, line2 in zip(f, f):  # Read two lines at a time
-                parts1 = line1.strip().split(',')
-                parts2 = line2.strip().split(',')
+        df = pd.read_csv('dataset/minigrid_RLHF_dataset.csv')
+        for i in range(0, len(df), 2):
+            row1, row2 = df.iloc[i], df.iloc[i+1]
 
-                # Preference not used (reward modelling implicit in DPO)
-                state_x1, state_y1, action_x1, action_y1, _ = map(float, parts1)
-                state_x2, state_y2, action_x2, action_y2, _ = map(float, parts2)
+            # Preference not used (reward modelling implicit in DPO)
+            state_x1, state_y1, action_x1, action_y1, _ = map(float, row1)
+            state_x2, state_y2, action_x2, action_y2, _ = map(float, row2)
 
-                # Translate actions into scalars
-                action_1 = ACTIONS.index((action_x1, action_y1))
-                action_2 = ACTIONS.index((action_x2, action_y2))
+            # Translate actions into scalars
+            action_1 = ACTIONS.index((action_x1, action_y1))
+            action_2 = ACTIONS.index((action_x2, action_y2))
 
-                # Pair of preferred and dispreferred state-action pairs
-                data.append([(state_x1, state_y1, action_1),
-                             (state_x2, state_y2, action_2)])
+            # Pair of preferred and dispreferred state-action pairs
+            data.append([(state_x1, state_y1, action_1),
+                         (state_x2, state_y2, action_2)])
 
         # Convert data to PyTorch tensors
         self.test = np.array(data)
@@ -172,11 +149,11 @@ class PPO:
                 torch.save(self.critic.state_dict(), './ppo_critic.pth')
 
     def _init_hp(self, alpha, alpha_c, gamma):
-        self.steps_per_batch = 1000
+        self.steps_per_batch = 1600
         self.max_episode = 200  # maximum timesteps per episode: prevents episode from runnning forever
         self.gamma = gamma
         self.n_updates_per_iteration = 10
-        self.clip = 0.2
+        self.clip = 0.001
         self.alpha = alpha
         self.alpha_c = alpha_c
         # Miscellaneous parameters
@@ -386,9 +363,9 @@ class PPO:
                 print(f"State ({x},{y}) : {action_probs}")
 
 
-def train(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=0.01, gamma=0.925, n_steps=100000):
+def train(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=0.05, gamma=1, n_steps=100000):
     print("Beginning training procedure")
-    model = PPO(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=1e-2, alpha_c=0.3, gamma=0.925)
+    model = PPO(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=alpha, alpha_c=0.3, gamma=1)
     model.learn(n_steps)
 
     plt.plot(range(len(model.logger['overall_loss'])), model.logger['overall_loss'])
@@ -447,8 +424,9 @@ def train_set(env):
     losses = {}
     rewards = {}
     accuracy = {}
-    for alpha in [0.001, 0.005, 0.01, 0.02]:
-        for gamma in [0.925, 0.95, 0.99]:
+    gamma = 0.99
+    for alpha in [0.05]:
+        for gamma in [0.35]:
             l, r, a = train(env, alpha, gamma, 200000)
 
             losses[f"{alpha}:{gamma}"] = l

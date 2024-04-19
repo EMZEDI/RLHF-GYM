@@ -40,7 +40,7 @@ class RewardModelSimulator(MinigridEnv):
 
         self.model = RewardModel()
         # TODO: Could potentially use torch.device to use GPU if available
-        self.model.load_state_dict(torch.load('../models/reward_model.pth'))
+        self.model.load_state_dict(torch.load('models/reward_model.pth'))
         self.model.eval()
 
     def step(self, action):
