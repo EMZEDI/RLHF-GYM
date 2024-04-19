@@ -3,7 +3,7 @@
 # load the torch model 
 import torch
 from src.reward_training import RewardModel
-from RLHFenvironment import RLHFEnv
+from rewardmodelsimulator import RewardModelSimulator
 
 mode = "env"
 
@@ -35,7 +35,7 @@ if mode == "reward":
 
 else:
     # create rlhf env
-    env = RLHFEnv()
+    env = RewardModelSimulator()
     state = env.reset()
     print(state)
 

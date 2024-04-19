@@ -7,7 +7,7 @@ Inspired by tutorial given by Eric Yang Yu: https://medium.com/analytics-vidhya/
 import matplotlib.pyplot as plt
 
 from evalPPO import eval_policy
-from RLHFenvironment import RLHFEnv
+from rewardmodelsimulator import RewardModelSimulator
 import time
 import numpy as np
 import torch
@@ -371,7 +371,7 @@ def test(env, actor_model):
     eval_policy(policy=policy, env=env, render=True)
 
 def train_set():
-    env = RLHFEnv()
+    env = RewardModelSimulator()
 
     losses = {}
     rewards = {}
@@ -402,6 +402,6 @@ def train_set():
     plt.close()
     #test(env, actor_model='ppo_actor.pth')
 
-env = RLHFEnv()
+env = RewardModelSimulator()
 
 train(env, 0.02, 0.925, 200000)

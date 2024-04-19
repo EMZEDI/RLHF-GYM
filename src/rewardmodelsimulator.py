@@ -3,7 +3,7 @@ import torch
 from src.reward_training import RewardModel
 import numpy as np
 
-class RLHFEnv(MinigridEnv):
+class RewardModelSimulator(MinigridEnv):
     """
     This class provides an implementation of the RLHF (Reinforcement Learning with Human Feedback) environment. 
     The environment uses a pre-trained reward model to replace the traditional reward system based on RLHF principles.
