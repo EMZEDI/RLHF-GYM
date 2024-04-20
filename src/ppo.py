@@ -79,7 +79,7 @@ class PPO:
     def load_data(self):
         ACTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         data = []
-        df = pd.read_csv('dataset/minigrid_RLHF_dataset.csv')
+        df = pd.read_csv('../dataset/minigrid_RLHF_dataset.csv')
         for i in range(0, len(df), 2):
             row1, row2 = df.iloc[i], df.iloc[i+1]
 
@@ -120,13 +120,14 @@ class PPO:
             adv_k = batch_rtgs - v.detach()  # getting the advantages for the time steps
             adv_k = (adv_k - adv_k.mean()) / (adv_k.std() + 1e-10)  # normalizing the advantages
 
+            actor_loss_list = []
             for i in range(self.n_updates_per_iteration):
                 v, curr_log_probs = self.evaluate(batch_s, batch_a)
 
                 ratios = torch.exp(curr_log_probs - batch_log_probs)
 
                 s1 = ratios * adv_k
-                s2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * adv_k
+                s2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip)* adv_k
 
                 actor_loss = (-torch.min(s1, s2)).mean()
                 self.a_optim.zero_grad()
@@ -134,10 +135,10 @@ class PPO:
                 self.a_optim.step()
 
                 critic_loss = nn.MSELoss()(v, batch_rtgs)
+                critic_loss = torch.clamp(critic_loss, 1 - self.clip, 1 + self.clip)
                 self.c_optim.zero_grad()
                 critic_loss.backward()
                 self.c_optim.step()
-
                 self.logger['actor_losses'].append(actor_loss.detach())
                 #self.logger['critic_losses'].append(critic_loss.detach())
 
@@ -149,10 +150,10 @@ class PPO:
                 torch.save(self.critic.state_dict(), './ppo_critic.pth')
 
     def _init_hp(self, alpha, alpha_c, gamma):
-        self.steps_per_batch = 1600
-        self.max_episode = 200  # maximum timesteps per episode: prevents episode from runnning forever
+        self.steps_per_batch = 10000
+        self.max_episode = 400  # maximum timesteps per episode: prevents episode from runnning forever
         self.gamma = gamma
-        self.n_updates_per_iteration = 10
+        self.n_updates_per_iteration = 5
         self.clip = 0.001
         self.alpha = alpha
         self.alpha_c = alpha_c
@@ -265,7 +266,7 @@ class PPO:
         avg_ep_lens = np.mean(self.logger['batch_lens'])
         avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         avg_test_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_test_rews']])
-        avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
+        avg_actor_loss = np.mean(self.logger['actor_losses'])
 
         self.logger['overall_reward'].append(avg_ep_rews)
         self.logger['overall_loss'].append(avg_actor_loss)
@@ -363,9 +364,9 @@ class PPO:
                 print(f"State ({x},{y}) : {action_probs}")
 
 
-def train(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=0.05, gamma=1, n_steps=100000):
+def train(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=0.005, alpha_c=0.4, gamma=0.9, n_steps=600000):
     print("Beginning training procedure")
-    model = PPO(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=alpha, alpha_c=0.3, gamma=1)
+    model = PPO(env=RewardModelSimulator(), test_env=RLHFEnv(), alpha=alpha, alpha_c=alpha_c, gamma=gamma)
     model.learn(n_steps)
 
     plt.plot(range(len(model.logger['overall_loss'])), model.logger['overall_loss'])
@@ -427,7 +428,7 @@ def train_set(env):
     gamma = 0.99
     for alpha in [0.05]:
         for gamma in [0.35]:
-            l, r, a = train(env, alpha, gamma, 200000)
+            l, r, a = train(env, alpha, gamma, 500000)
 
             losses[f"{alpha}:{gamma}"] = l
             rewards[f"{alpha}:{gamma}"] = r
